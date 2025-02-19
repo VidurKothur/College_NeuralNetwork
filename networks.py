@@ -4,10 +4,13 @@ import inspect
 from gradient import gradient
 from data import Tensor
 
+"""
+To be implemented later
+
+"""
 class Network:
     def __init__(self):
         self.layers = []
-        self.terminationFunction = None
         self.lossFunction = None
         self.dissipationFunction = None
         self.networkFunction = None

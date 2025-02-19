@@ -2,6 +2,19 @@ import numpy as np
 from typing import *
 import copy
 
+"""
+This is a custom data type that reroutes operations to the functions module, where it can be used in conjuction with 
+the Node data type.
+
+The purpose of this class is to wrap the numpy ndarray class, allowing numpy arrays to interact with Node objects while
+avoiding a central problem: the np.ndarray class already implements methods like __add__, __sub__, etc., which I found to
+change the data stored within that array in some cases. When I tried to, for example, add an np.ndarray and Node object,
+even though the Node class has __radd__ implemented, the computation defaults to numpy's __add__ method, changing the data
+in my np.ndarray. By computing with Tensors and Nodes, both Tensor + Node and Node + Tensor ultimately defers the computation
+to the functions module, where computational graph logic is handled.
+
+"""
+
 class Tensor:
     def __init__(self, iterable: Any) -> None:
         try:
@@ -13,10 +26,10 @@ class Tensor:
             raise TypeError(f"Error: The input 'iterable' of value {iterable} of type {type(iterable)} could not be resolved to a mathematical object")
 
     def __repr__(self) -> str:
-        return f"\n{self.data.__str__()}"
+        return f"\n{self.data.__str__()}\n"
     
     def __str__(self) -> str:
-        return f"\n{self.data.__str__()}"
+        return f"\n{self.data.__str__()}\n"
     
     def __len__(self) -> int:
         return len(self.data)
@@ -78,6 +91,14 @@ class Tensor:
     def __rmul__(self, value):
         import functions
         return functions.mul(value, self)
+    
+    def __pow__(self, value):
+        import functions
+        return functions.pow(self, value)
+    
+    def __rpow__(self, value):
+        import functions
+        return functions.pow(value, self)
     
     def __matmul__(self, value):
         import functions

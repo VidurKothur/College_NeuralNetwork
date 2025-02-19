@@ -2,6 +2,7 @@ import inspect
 import numpy as np
 from typing import *
 
+#Base class for layer variables, Constant and Parameter inherit from this
 class Variable:
     def __init__(self, debugForwardKey: str = None, debugBackwardKey: str = None, regularizationFunction: Callable = None, regularizationWeight: Union[int, float, np.ndarray] = 1, value: Any = None) -> None:
         self.debugForwardKey = None

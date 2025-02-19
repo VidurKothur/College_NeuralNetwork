@@ -1,240 +1,465 @@
 import numpy as np
 from node import Node
-import options as ops
 from typing import *
 from data import Tensor
-import copy
 
-def toArray(a: Any) -> np.ndarray[np.float64]:
-    try:
-        if isinstance(a, Tensor):
-            return a.data
-        return np.array(a, np.float64)
-    except:
-        raise TypeError(f"Error: '{a}' (type {type(a)}) could not be resolved to a mathematical object")
-    
-def eqDim(x, y):
-    if x.ndim < y.ndim:
-        while x.ndim < y.ndim:
-            x = np.array([x])
-        return x, y
-    elif x.ndim > y.ndim:
-        while x.ndim > y.ndim:
-            y = np.array([y])
-        return x, y
-    else:
-        return x, y
-    
-def broadcast(a, s):
-    if isinstance(a, Node):
+e = 2.718281828459045
+pi = 3.141592653589793
+
+"""
+Below are the wrapping functions for handling operations during forward propagation.
+
+func2 is a wrapping function for handling a function of two inputs.
+
+If both inputs are of type Node, then func2 will:
+1. Make sure both input Nodes are wrapping data that is of type Tensor
+2. Broadcast or map the inputs if they need to be broadcasted or mapped to the same dimension
+3. Run the operation on the Tensor data that is inside the node
+4. Create a resulting Node, send that to the Graph, and return the Node
+
+If one input is of type Node and another is not, then func2 will:
+1. Make sure that both the Node's internal data and the other input are of type Tensor
+2. Wrap the other input inside a Node and send that to the Graph
+3. Broadcast or map the inputs if they need to be broadcasted or mapped to the same dimension
+4. Run the operation on the Tensor data that is inside the node
+5. Create a resulting Node, send that to the Graph, and return the Node
+
+If both inputs are not of type Node, then func2 will:
+1. Make sure both inputs are of type Tensor
+2. Broadcast or map the inputs if they need to be broadcasted or mapped to the same dimension
+3. Run the operation on the Tensors and return the result
+
+NOTE: The operation function will only take in two Tensors as input and will only output a single Tensor.
+
+func1 is a wrapping function for handling a function of one input.
+
+If the input is of type Node, then func1 will:
+1. Make sure the Node's internal data is of type Tensor
+2. Run the operation on the Tensor data
+3. Create a resulting Node, send that to the Graph, and return the Node
+
+If the input is not of type Node, then func1 will:
+1. Make sure the input is of type Tensor
+2. Run the operation on the Tensor and return it
+
+NOTE: The operation function will only take in a single Tensor as input and will only output a single Tensor.
+NOTE: Broadcasting and mapping will not occur in func1 because there will only be one input.
+
+"""
+
+def func2(input1: Any, input2: Any, operation: Callable, gradient: Callable, prompt: str, matchDimension: bool = True, toBroadcast: bool = True) -> Union[Node, Tensor]:
+    if isinstance(input1, Node) and isinstance(input2, Node):
+        input1.value = Tensor(input1.value)
+        input2.value = Tensor(input2.value)
+        if toBroadcast:
+            shape = np.broadcast_shapes(input1.value.shape, input2.value.shape)
+            input1 = broadcast(input1, shape)
+            input2 = broadcast(input2, shape)
+        if matchDimension:
+            dim1 = input1.value.ndim
+            dim2 = input2.value.ndim
+            if dim1 < dim2:
+                input1 = dimension(input1, dim2 - dim1)
+            elif dim2 < dim1:
+                input2 = dimension(input2, dim1 - dim2)
         try:
-            x = copy.deepcopy(np.broadcast_to(a.value.data, s))
-        except:
-            raise ValueError(f"Error: The operand {a.value.data} and could not be broadcasted to {s}")
-        if not x.shape == a.value.shape:
-            identity = len(a.graph.registry)
-            s1 = Node(a.graph, identity, Tensor(s), {identity}, (), None, False, None)
-            s1.sendToGraph()
-            x1 = Node(a.graph, identity + 1, Tensor(x), a.paths | {identity, identity + 1}, (a.identity, identity), broadGrad, False, None)
-            x1.sendToGraph()
-            x = x1
-        else:
-            x = a
-        return x
-    else:
+            value = operation(input1.value, input2.value)
+        except Exception as e:
+            raise ValueError(f"Error: {prompt} could not be performed on '{input1.value}' and '{input2.value}'. Reason: {str(e)}")
+        identity = len(input1.graph.registry)
+        result = Node(input1.graph, identity, value, input1.paths | input2.paths | {identity}, (input1.identity, input2.identity), gradient, False, None)
+        result.sendToGraph()
+        return result
+    elif isinstance(input1, Node) and not isinstance(input2, Node):
+        input1.value = Tensor(input1.value)
+        input2 = Tensor(input2)
+        identity = len(input1.graph.registry)
+        operand = Node(input1.graph, identity, input2, {identity}, (), None, False, None)
+        operand.sendToGraph()
+        if toBroadcast:
+            shape = np.broadcast_shapes(input1.value.shape, operand.value.shape)
+            input1 = broadcast(input1, shape)
+            operand = broadcast(operand, shape)
+        if matchDimension:
+            dim1 = input1.value.ndim
+            dim2 = operand.value.ndim
+            if dim1 < dim2:
+                input1 = dimension(input1, dim2 - dim1)
+            if dim2 < dim1:
+                operand = dimension(operand, dim1 - dim2)
         try:
+            value = operation(input1.value, operand.value)
+        except Exception as e:
+            raise ValueError(f"Error: {prompt} could not be performed on '{input1.value}' and '{operand.value}'. Reason: {str(e)}")
+        result = Node(input1.graph, len(input1.graph.registry), value, input1.paths | operand.paths | {identity + 1}, (input1.identity, operand.identity), gradient, False, None)
+        result.sendToGraph()
+        return result
+    elif not isinstance(input1, Node) and isinstance(input2, Node):
+        input1 = Tensor(input1)
+        input2.value = Tensor(input2.value)
+        identity = len(input2.graph.registry)
+        operand = Node(input2.graph, identity, input1, {identity}, (), None, False, None)
+        operand.sendToGraph()
+        if toBroadcast:
+            shape = np.broadcast_shapes(operand.value.shape, input2.value.shape)
+            operand = broadcast(operand, shape)
+            input2 = broadcast(input2, shape)
+        if matchDimension:
+            dim1 = operand.value.ndim
+            dim2 = input2.value.ndim
+            if dim1 < dim2:
+                operand = dimension(operand, dim2 - dim1)
+            if dim2 < dim1:
+                input2 = dimension(input2, dim1 - dim2)
+        try:
+            value = operation(operand.value, input2.value)
+        except Exception as e:
+            raise ValueError(f"Error: {prompt} could not be performed on '{operand.value}' and '{input2.value}'. Reason: {str(e)}")
+        result = Node(input2.graph, len(input2.graph.registry), value, operand.paths | input2.paths | {identity + 1}, (operand.identity, input2.identity), gradient, False, None)
+        result.sendToGraph()
+        return result
+    else:
+        input1 = Tensor(input1)
+        input2 = Tensor(input2)
+        if toBroadcast:
+            shape = np.broadcast_shapes(input1.shape, input2.shape)
+            input1 = broadcast(input1, shape)
+            input2 = broadcast(input2, shape)
+        if matchDimension:
+            dim1 = input1.ndim
+            dim2 = input2.ndim
+            if dim1 < dim2:
+                input1 = dimension(input1, dim2 - dim1)
+            if dim2 < dim1:
+                input2 = dimension(input2, dim1 - dim2)
+        try:
+            result = operation(input1, input2)
+            return result
+        except Exception as e:
+            raise ValueError(f"Error: {prompt} could not be performed on '{input1}' and '{input2}'. Reason: {str(e)}")
+        
+def func1(input1: Any, operation: Callable, gradient: Callable, prompt: str) -> Union[Node, np.ndarray[np.float64]]:
+    if isinstance(input1, Node):
+        input1.value = Tensor(input1.value)
+        try:
+            value = operation(input1.value)
+        except Exception as e:
+            raise ValueError(f"Error: {prompt} could not be performed on '{input1.value}'. Reason: {str(e)}")
+        identity = len(input1.graph.registry)
+        result = Node(input1.graph, identity, value, input1.paths | {identity}, (input1.identity,), gradient, False, None)
+        result.sendToGraph()
+        return result
+    else:
+        input1 = Tensor(input1)
+        try:
+            result = operation(input1)
+            return result
+        except Exception as e:
+            raise ValueError(f"Error: {prompt} could not be performed on '{input1}'. Reason: {str(e)}")
+
+"""
+Below are the functions for broadcasting two arrays or making their dimensions equal, along with their
+respective gradient functions.
+
+Both functions add to the respective computational graph if the input is a Node, but the functions and
+gradients will not pass through func1/func2 and grad1/grad2 because these two functions are exceptions, 
+there is no need to write code for finding a gradient with respect to the shape or number of dimensions
+to expand.
+
+"""
+
+def dimension(input1: Union[Node, Tensor], number: int) -> Union[Node, Tensor]:
+    if isinstance(input1, Node):
+        final = None
+        if number != 0:
             try:
-                a = Tensor(a)
-            except: 
-                raise TypeError(f"Error: The operand {a} could not be resolved to a mathematical object")
-            x = np.broadcast_to(a.data, s)
+                final = np.expand_dims(input1.value.data, axis=tuple(a for a in range(0, number))).copy()
+            except:
+                raise ValueError(f"Error: The operand {input1.value.data} could not expanded {number} dimensions")
+            identity = len(input1.graph.registry)
+            numberNode = Node(input1.graph, identity, Tensor(number), {identity}, (), None, False, None)
+            numberNode.sendToGraph()
+            newFinal = Node(input1.graph, identity + 1, Tensor(final), input1.paths | {identity, identity + 1}, (input1.identity, identity), dimensionGrad, False, None)
+            newFinal.sendToGraph()
+            final = newFinal
+        else:
+            final = input1
+        return final
+    else:
+        try:
+            final = np.expand_dims(input1.data, axis=tuple(a for a in range(0, number))).copy()
+            return Tensor(final)
         except:
-            raise ValueError(f"Error: The operand {a} could not be broadcasted to {s}")
-        return Tensor(x)
+            raise ValueError(f"Error: The operand {input1} could not expanded {number} dimensions")
 
-def func2(a: Any, b: Any, op: Callable, fun: Callable, prompt: str, broad: bool = True) -> Union[Node, np.ndarray[np.float64]]:
-    if isinstance(a, Node) and isinstance(b, Node):
-        a.value = Tensor(a.value)
-        b.value = Tensor(b.value)
-        if broad:
-            shape = np.broadcast_shapes(a.value.shape, b.value.shape)
-            a = broadcast(a, shape)
-            b = broadcast(b, shape)
-        try:
-            v = op(a.value, b.value)
-        except Exception as e:
-            raise ValueError(f"Error: {prompt} could not be performed on '{a.value}' and '{b.value}'. Reason: {str(e)}")
-        identity = len(a.graph.registry)
-        c = Node(a.graph, identity, v, a.paths | b.paths | {identity}, (a.identity, b.identity), fun, False, None)
-        c.sendToGraph()
-        return c
-    elif isinstance(a, Node) and not isinstance(b, Node):
-        a.value = Tensor(a.value)
-        b = Tensor(b)
-        identity = len(a.graph.registry)
-        c = Node(a.graph, identity, b, {identity}, (), None, False, None)
-        c.sendToGraph()
-        if broad:
-            shape = np.broadcast_shapes(a.value.shape, c.value.shape)
-            a = broadcast(a, shape)
-            c = broadcast(c, shape)
-        try:
-            v = op(a.value, b)
-        except Exception as e:
-            raise ValueError(f"Error: {prompt} could not be performed on '{a.value}' and '{b}'. Reason: {str(e)}")
-        d = Node(a.graph, identity + 1, v, a.paths | c.paths | {identity + 1}, (a.identity, c.identity), fun, False, None)
-        d.sendToGraph()
-        return d
-    elif not isinstance(a, Node) and isinstance(b, Node):
-        a = Tensor(a)
-        b.value = Tensor(b.value)
-        identity = len(b.graph.registry)
-        c = Node(b.graph, identity, a, {identity}, (), None, False, None)
-        c.sendToGraph()
-        if broad:
-            shape = np.broadcast_shapes(c.value.shape, b.value.shape)
-            c = broadcast(c, shape)
-            b = broadcast(b, shape)
-        try:
-            v = op(a, b.value)
-        except Exception as e:
-            raise ValueError(f"Error: {prompt} could not be performed on '{a}' and '{b.value}'. Reason: {str(e)}")
-        d = Node(b.graph, identity + 1, v, b.paths | c.paths | {identity + 1}, (c.identity, b.identity), fun, False, None)
-        d.sendToGraph()
-        return d
-    else:
-        a = Tensor(a)
-        b = Tensor(b)
-        if broad:
-            shape = np.broadcast_shapes(a.shape, b.shape)
-            a = broadcast(a, shape)
-            b = broadcast(b, shape)
-        try:
-            c = op(a, b)
-            return c
-        except Exception as e:
-            raise ValueError(f"Error: {prompt} could not be performed on '{a}' and '{b}'. Reason: {str(e)}")
-        
-def func1(a: Any, op: Callable, fun: Callable, prompt: str) -> Union[Node, np.ndarray[np.float64]]:
-    if isinstance(a, Node):
-        a.value = Tensor(a.value)
-        try:
-            v = op(a.value)
-        except Exception as e:
-            raise ValueError(f"Error: {prompt} could not be performed on '{a.value}'. Reason: {str(e)}")
-        identity = len(a.graph.registry)
-        c = Node(a.graph, identity, v, a.paths | {identity}, (a.identity,), fun, False, None)
-        c.sendToGraph()
-        return c
-    else:
-        a = Tensor(a)
-        try:
-            c = op(a)
-            return c
-        except Exception as e:
-            raise ValueError(f"Error: {prompt} could not be performed on '{a}'. Reason: {str(e)}")
-        
-def grad2(a: Any, b: Any, aFunc: Callable, bFunc: Callable, pos: int, options: dict, prompt: str) -> np.ndarray:
-    a = Tensor(a)
-    b = Tensor(b)
-    final = None
-    try:
-        if pos == 0:
-            final = aFunc(a, b)
+def dimensionGrad(input1: Tensor, position: int):
+    return input1
+
+def broadcast(input1: Union[Node, Tensor], shape: tuple) -> Union[Node, Tensor]:
+    if isinstance(input1, Node):
+        final = None
+        if input1.value.shape != shape:
+            try:
+                final = np.broadcast_to(input1.value.data, shape).copy()
+            except:
+                raise ValueError(f"Error: The operand {input1.value.data} and could not be broadcasted to {shape}")
+            identity = len(input1.graph.registry)
+            shapeNode = Node(input1.graph, identity, Tensor(shape), {identity}, (), None, False, None)
+            shapeNode.sendToGraph()
+            newFinal = Node(input1.graph, identity + 1, Tensor(final), input1.paths | {identity, identity + 1}, (input1.identity, identity), broadcastGrad, False, None)
+            newFinal.sendToGraph()
+            final = newFinal
         else:
-            final = bFunc(a, b)
-    except Exception as e:
-        raise ValueError(f"Error: {prompt} gradient could not be calculated on '{a}' and '{b}'. Reason: {str(e)}")
-    if "revert" in options:
-        if pos == 0:
-            final = options["revert"](a.shape, final)
-        else:
-            final = options["revert"](b.shape, final)
-    if "regulate" in options:
-        final = options["regulate"](final.data)
-    return final
+            final = input1
+        return final
+    else:
+        try:
+            final = np.broadcast_to(input1.data, shape)
+            return Tensor(final)
+        except:
+            raise ValueError(f"Error: The operand {input1} could not be broadcasted to {shape}")
+    
+def broadcastGrad(input1: Tensor, shape: Tensor, position: int):
+    output = np.broadcast_to(input1.data, shape).copy()
+    originalShape = input1.shape
+    axes = tuple(i for i, (xDim, shapeDim) in enumerate(zip(tuple(1 for j in range(len(shape) - len(originalShape))) + originalShape, shape)) if xDim == 1 and shapeDim > 1)
+    return Tensor(np.sum(output, axis=axes, keepdims=True).reshape(originalShape))
 
-def grad1(a: Any, aFunc: Callable, pos: int, options: dict, prompt: str) -> np.ndarray:
-    a = Tensor(a)
-    final = None
-    try:
-        if pos == 0:
-            final = aFunc(a)
-    except Exception as e:
-        raise ValueError(f"Error: {prompt} gradient could not be calculated on '{a}'. Reason: {str(e)}")
-    if "revert" in options:
-        if pos == 0:
-            final = options["revert"](a.shape, final)
-    if "regulate" in options:
-        final = options["regulate"](final)
-    return final
+"""
+Below are the external-use functions that this module supports, along with their respective gradient functions.
 
-def add(a: Any, b: Any) -> np.ndarray:
-    op = lambda x, y: Tensor(x.data + y.data)
-    return func2(a, b, op, addGrad, "Addition")
+Each function will have this format:
 
-def addGrad(a: Any, b: Any, pos: int, options: dict = { "revert": ops.revertSum(), "regulate": None }):
-    aF = lambda x, y: Tensor(np.ones_like(y.data, np.float64))
-    bF = lambda x, y: Tensor(np.ones_like(x.data, np.float64))
-    return grad2(a, b, aF, bF, pos, options, "Addition")
+Binary Operation:
 
-def sub(a: Any, b: Any) -> np.ndarray:
-    op = lambda x, y: Tensor(x.data - y.data)
-    return func2(a, b, op, subGrad, "Subtraction")
+def name(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor({some operation of inputs})
+    return func2(input1=input1, input2=input2, operation=operation, gradient={respective gradient}, 
+    prompt="{function name}", dimension=False, broadcast=True)
 
-def subGrad(a: Any, b: Any, pos: int, options: dict = { "revert": ops.revertSum(), "regulate": None }):
-    aF = lambda x, y: Tensor(np.ones_like(y.data, np.float64))
-    bF = lambda x, y: Tensor(-np.ones_like(x.data, np.float64))
-    return grad2(a, b, aF, bF, pos, options, "Subtraction")
+Unary Operation:
 
-def mul(a, b):
-    op = lambda x, y: Tensor(x.data * y.data)
-    return func2(a, b, op, mulGrad, "Multiplication")
+def name(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor({some operation of input})
+    return func1(input1=input1, operation=operation, gradient={respective gradient}, prompt="{function name}")
 
-def mulGrad(a, b, pos, options = { "revert": ops.revertSum(), "regulate": None }):
-    aF = lambda x, y: Tensor(y.data)
-    bF = lambda x, y: Tensor(x.data)
-    return grad2(a, b, aF, bF, pos, options, "Multiplication")
+In both cases, the inputs will be rerouted into the wrapper function (func1 or func2), where type checking, 
+computational graph handling, and error handling will occur. The "prompt" parameter is only used for 
+customizing the error message, and the "gradient" parameter is only sent for Nodes to carry during backpropagation.
 
-def mmul(a, b):
-    def op(x, y):
-        x.data, y.data = eqDim(x.data, y.data)
-        return Tensor(x.data @ y.data)
-    return func2(a, b, op, mmulGrad, "Matrix Multiplication", False)
+NOTE: The operation will always take in Tensors as input and output Tensors.
 
-def mmulGrad(a, b, pos, options = { "revert": ops.revertSum(), "regulate": None }):
-    aF = lambda x, y: Tensor(y.data.T)
-    bF = lambda x, y: Tensor(x.data.T)
-    return grad2(a, b, aF, bF, pos, options, "Matrix Multiplication")
+Each gradient will have this format:
 
-def sum(a):
-    op = lambda x: Tensor(np.sum(x.data, dtype=np.float64))
-    return func1(a, op, sumGrad, "Summation")
+Binary Gradient:
 
-def sumGrad(a, pos, options = { "revert": ops.revertSum(), "regulate": None }):
-    aF = lambda x: Tensor(np.ones_like(x.data, dtype=np.float64))
-    return grad1(a, aF, pos, options, "Summation")
+def nameGrad(input1: Tensor, input2: Tensor, position: int):
+    if position == 0:
+        return Tensor({some operation of inputs})
+    else:
+        return Tensor({some operation of inputs})
 
-def abs(a):
-    op = lambda x: Tensor(np.abs(x.data, dtype=np.float64))
-    return func1(a, op, absGrad, "Absolute Value")
+Unary Gradient:
 
-def absGrad(a, pos, options = { "revert": ops.revertSum(), "regulate": None }):
-    aF = lambda x: Tensor(np.sign(x.data, dtype=np.float64))
-    return grad1(a, aF, pos, options, "Absolute Value")
+def nameGrad(input1: Tensor, position: int):
+    return Tensor({some operation of inputs})
 
-def ReLU(a):
-    op = lambda x: Tensor(np.where(x.data < 0, 0, x.data))
-    return func1(a, op, ReLUGrad, "Rectified Linear Unit")
+In both cases, the return value will be handled differently, depending on what the gradient is being taken
+respect to, the "position" parameter. There is no error handling here because the data types are guaranteed
+to be Tensor by the backpropagation algorithm, and the error will be handled separately during network
+execution.
 
-def ReLUGrad(a, pos, options = { "revert": ops.revertSum(), "regulate": None }):
-    aF = lambda x: Tensor(np.where(x.data < 0, 0, 1))
-    return grad1(a, aF, pos, options, "Rectified Linear Unit")
+"""
 
-def broadGrad(a, pos, options = { "revert": ops.revertSum(), "regulate": None }):
-    def aF(x, s):
-        x1 = np.broadcast_to(x.data, s)
-        s1 = x.shape
-        axes = tuple(i for i, (xdim, sdim) in enumerate(zip(tuple(1 for j in range(len(s) - len(s1))) + s1, s)) if xdim == 1 and sdim > 1)
-        return Tensor(np.sum(x1, axis=axes, keepdims=True).reshape(s1))
-    return grad1(a, aF, pos, options, "Broadcast")
+def add(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(x.data + y.data)
+    return func2(input1=input1, input2=input2, operation=operation, gradient=addGrad, prompt="Addition", matchDimension=False, toBroadcast=True)
+
+def addGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor(np.ones_like(input2.data, np.float64)) if not localDerivative is None else Tensor(np.ones_like(input2.data, np.float64))
+    else:
+        return localDerivative * Tensor(np.ones_like(input1.data, np.float64)) if not localDerivative is None else Tensor(np.ones_like(input1.data, np.float64))
+
+def sub(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(x.data - y.data)
+    return func2(input1=input1, input2=input2, operation=operation, gradient=subGrad, prompt="Subtraction", matchDimension=False, toBroadcast=True)
+
+def subGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor(np.ones_like(input2.data, np.float64)) if not localDerivative is None else Tensor(np.ones_like(input2.data, np.float64))
+    else:
+        return localDerivative * Tensor(-np.ones_like(input1.data, np.float64)) if not localDerivative is None else Tensor(-np.ones_like(input2.data, np.float64))
+
+def mul(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(x.data * y.data)
+    return func2(input1=input1, input2=input2, operation=operation, gradient=mulGrad, prompt="Multiplication", matchDimension=False, toBroadcast=True)
+
+def mulGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor(input2.data) if not localDerivative is None else Tensor(input2.data)
+    else:
+        return localDerivative * Tensor(input1.data) if not localDerivative is None else Tensor(input1.data)
+
+def div(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(x.data / y.data)
+    return func2(input1=input1, input2=input2, operation=operation, gradient=divGrad, prompt="Division", matchDimension=False, toBroadcast=True)
+
+def divGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor(1 / input2.data) if not localDerivative is None else Tensor(1 / input2.data)
+    else:
+        return localDerivative * Tensor(-input1.data / (input2.data ** 2)) if not localDerivative is None else Tensor(-input1.data / (input2.data ** 2))
+
+def pow(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(x.data ** y.data)
+    return func2(input1=input1, input2=input2, operation=operation, gradient=powGrad, prompt="Power", matchDimension=False, toBroadcast=True)
+
+def powGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor((input2.data) * (input1.data ** (input2.data - 1))) if not localDerivative is None else Tensor((input2.data) * (input1.data ** (input2.data - 1)))
+    else:
+        return localDerivative * Tensor((input1.data ** input2.data) * np.log(input1.data, dtype=np.float64)) if not localDerivative is None else Tensor((input1.data ** input2.data) * np.log(input1.data, dtype=np.float64))
+
+def log(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(np.log(x.data, dtype=np.float64) / np.log(y.data, dtype=np.float64))
+    return func2(input1=input1, input2=input2, operation=operation, gradient=logGrad, prompt="Logarithm", matchDimension=False, toBroadcast=True)
+
+def logGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor(-np.log(input2.data, dtype=np.float64) / (input1.data * (np.log(input1.data, dtype=np.float64) ** 2))) if not localDerivative is None else Tensor(-np.log(input2.data, dtype=np.float64) / (input1.data * (np.log(input1.data, dtype=np.float64) ** 2)))
+    else:
+        return localDerivative * Tensor(1 / (input2.data * np.log(input1.data, dtype=np.float64))) if not localDerivative is None else Tensor(1 / (input2.data * np.log(input1.data, dtype=np.float64)))
+    
+def mmul(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(x.data @ y.data)
+    return func2(input1=input1, input2=input2, operation=operation, gradient=mmulGrad, prompt="Matrix Multiplication", matchDimension=True, toBroadcast=False)
+
+def mmulGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative @ Tensor(input2.T) if not localDerivative is None else Tensor(input2.T @ np.ones(np.shape(input1 @ input2), np.float64))
+    else:
+        return Tensor(input1.T) @ localDerivative if not localDerivative is None else Tensor(input1.T @ np.ones(np.shape(input1 @ input2), np.float64))
+
+def max(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(np.maximum(x.data, y.data, dtype=np.float64))
+    return func2(input1=input1, input2=input2, operation=operation, gradient=maxGrad, prompt="Maximum", matchDimension=True, toBroadcast=False)
+
+def maxGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor((input1.data >= input2.data).float()) if not localDerivative is None else Tensor((input1.data >= input2.data).float())
+    else:
+        return localDerivative * Tensor((input1.data <= input2.data).float()) if not localDerivative is None else Tensor((input1.data <= input2.data).float())
+
+def min(input1: Any, input2: Any) -> Union[Node, Tensor]:
+    operation = lambda x, y: Tensor(np.minimum(x.data, y.data))
+    return func2(input1=input1, input2=input2, operation=operation, gradient=minGrad, prompt="Minimum", matchDimension=True, toBroadcast=False)
+
+def minGrad(input1: Tensor, input2: Tensor, position: int, localDerivative: Tensor = None):
+    if position == 0:
+        return localDerivative * Tensor((input1.data <= input2.data).float()) if not localDerivative is None else Tensor((input1.data <= input2.data).float())
+    else:
+        return localDerivative * Tensor((input1.data >= input2.data).float()) if not localDerivative is None else Tensor((input1.data >= input2.data).float())
+
+def exp(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.exp(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=expGrad, prompt="E to the x")
+
+def expGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(np.exp(input1.data, dtype=np.float64)) if not localDerivative is None else Tensor(np.exp(input1.data, dtype=np.float64))
+
+def ln(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.log(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=lnGrad, prompt="Natural Logarithm")
+
+def lnGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(1 / (input1.data)) if not localDerivative is None else Tensor(1 / (input1.data))
+
+def sin(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.sin(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=sinGrad, prompt="Sine")
+
+def sinGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(np.cos(input1.data, dtype=np.float64)) if not localDerivative is None else Tensor(np.cos(input1.data, dtype=np.float64))
+
+def cos(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.cos(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=cosGrad, prompt="Cosine")
+
+def cosGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(-np.sin(input1.data, dtype=np.float64)) if not localDerivative is None else Tensor(-np.sin(input1.data, dtype=np.float64))
+
+def tan(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.tan(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=tanGrad, prompt="Tangent")
+
+def tanGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor((1 / np.cos(input1.data, dtype=np.float64)) ** 2) if not localDerivative is None else Tensor((1 / np.cos(input1.data, dtype=np.float64)) ** 2)
+
+def csc(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(1 / np.sin(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=cscGrad, prompt="Cosecant")
+
+def cscGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(-(1 / np.sin(input1.data, dtype=np.float64)) * (1 / np.tan(input1.data, dtype=np.float64))) if not localDerivative is None else Tensor(-(1 / np.sin(input1.data, dtype=np.float64)) * (1 / np.tan(input1.data, dtype=np.float64)))
+
+def sec(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(1 / np.cos(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=secGrad, prompt="Secant")
+
+def secGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor((1 / np.cos(input1.data, dtype=np.float64)) * (np.tan(input1.data, dtype=np.float64))) if not localDerivative is None else Tensor((1 / np.cos(input1.data, dtype=np.float64)) * (np.tan(input1.data, dtype=np.float64)))
+
+def cot(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(1 / np.tan(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=cotGrad, prompt="Cotangent")
+
+def cotGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(-((1 / np.sin(input1.data, dtype=np.float64)) ** 2)) if not localDerivative is None else Tensor(-((1 / np.sin(input1.data, dtype=np.float64)) ** 2))
+
+def sum(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.sum(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=sumGrad, prompt="Summation")
+
+def sumGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(np.ones_like(input1.data, dtype=np.float64)) if not localDerivative is None else Tensor(np.ones_like(input1.data, dtype=np.float64))
+
+def abs(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.abs(x.data, dtype=np.float64))
+    return func1(input1=input1, operation=operation, gradient=absGrad, prompt="Absolute Value")
+
+def absGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(np.sign(input1.data, dtype=np.float64)) if not localDerivative is None else Tensor(np.sign(input1.data, dtype=np.float64))
+
+def Sigmoid(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(1 / (1 + np.exp(-x)))
+    return func1(input1=input1, operation=operation, gradient=SigmoidGrad, prompt="Sigmoid")
+
+def SigmoidGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    sigmoid = Sigmoid(input1)
+    return localDerivative * Tensor(sigmoid * (1 - sigmoid)) if not localDerivative is None else Tensor(sigmoid * (1 - sigmoid))
+
+def Tanh(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.tanh(x))
+    return func1(input1=input1, operation=operation, gradient=TanhGrad, prompt="Tanh")
+
+def TanhGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(1 - (Tanh(input1) ** 2)) if not localDerivative is None else Tensor(1 - (Tanh(input1) ** 2))
+
+def ReLU(input1: Any) -> Union[Node, Tensor]:
+    operation = lambda x: Tensor(np.where(x.data < 0, 0, x.data))
+    return func1(input1=input1, operation=operation, gradient=ReLUGrad, prompt="Rectified Linear Unit")
+
+def ReLUGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    return localDerivative * Tensor(np.where(input1.data < 0, 0, 1)) if not localDerivative is None else Tensor(np.where(input1.data < 0, 0, 1))
+
+def Softmax(input1: Any) -> Union[Node, Tensor]:
+    def operation(x):
+        exp = np.exp(x)
+        return Tensor((1 / np.sum(exp)) * exp)
+    return func1(input1=input1, operation=operation, gradient=SoftmaxGrad, prompt="Softmax")
+
+def SoftmaxGrad(input1: Tensor, position: int, localDerivative: Tensor = None):
+    softmax = Softmax(input1)
+    return localDerivative * Tensor(softmax * (1 - softmax)) if not localDerivative is None else Tensor(softmax * (1 - softmax))
+
